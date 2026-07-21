@@ -1,0 +1,18 @@
+# Editor / OS
+*.swp
+.DS_Store
+
+# Node
+node_modules/
+
+# Build artefacts (web build + fetched server binary — produced during image build)
+build/
+server.js*
+
+# Runtime / secret files (generated at container start, never committed)
+certificates.pem
+detected-ip.txt
+.htpasswd
+
+# Downloaded build inputs
+*.deb

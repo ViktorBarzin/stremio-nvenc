@@ -1,0 +1,65 @@
+#!/bin/bash -e
+# NOTE (glibc rebase): shebang is bash, NOT /bin/sh. Upstream tsaridas ships
+# `#!/bin/sh -e`; on Alpine /bin/sh is busybox ash, which supports the
+# `${SERVER_URL: -1}` substring expansion below. On Debian /bin/sh is dash,
+# which errors "Bad substitution" on that construct, so we pin bash (shipped in
+# debian:bullseye-slim). Everything else in this script is carried over verbatim.
+
+CONFIG_FOLDER="${APP_PATH:-${HOME}/.stremio-server/}"
+AUTH_CONF_FILE="/etc/nginx/auth.conf"
+HTPASSWD_FILE="/etc/nginx/.htpasswd"
+
+sed -i 's/df -k/df -Pk/g' server.js
+
+if [ -n "${SERVER_URL}" ]; then
+    if [ "${SERVER_URL: -1}" != "/" ]; then
+        SERVER_URL="$SERVER_URL/"
+    fi
+    cp localStorage.json build/localStorage.json
+    touch build/server_url.env
+    sed -i "s|http://127.0.0.1:11470/|"${SERVER_URL}"|g" build/localStorage.json
+elif [ -n "${AUTO_SERVER_URL}" ] && [ "${AUTO_SERVER_URL}" -eq 1 ]; then
+    cp localStorage.json build/localStorage.json
+fi
+
+if [ -n "${USERNAME}" ] && [ -n "${PASSWORD}" ]; then
+    echo "Setting up HTTP basic authentication..."
+    htpasswd -bc "${HTPASSWD_FILE}" "${USERNAME}" "${PASSWORD}"
+    echo 'auth_basic "Restricted Content";' >"${AUTH_CONF_FILE}"
+    echo 'auth_basic_user_file '"${HTPASSWD_FILE}"';' >>"${AUTH_CONF_FILE}"
+else
+    echo "No HTTP basic authentication will be used."
+fi
+
+start_http_server() {
+    if [ -n "${WEBUI_INTERNAL_PORT}" ] && [ "${WEBUI_INTERNAL_PORT}" -ge 1 ] && [ "${WEBUI_INTERNAL_PORT}" -le 65535 ]; then
+        sed -i "s/8080/"${WEBUI_INTERNAL_PORT}"/g" /etc/nginx/http.d/default.conf
+    fi
+    nginx -g "daemon off;"
+}
+
+if [ -n "${IPADDRESS}" ]; then 
+    node certificate.js --action fetch
+    EXTRACT_STATUS="$?"
+
+    if [ "${EXTRACT_STATUS}" -eq 0 ] && [ -f "/srv/stremio-server/certificates.pem" ]; then
+        RESOLVED_IP="${IPADDRESS}"
+        if [ "${IPADDRESS}" = "0-0-0-0" ] && [ -f "/srv/stremio-server/detected-ip.txt" ]; then
+            RESOLVED_IP=$(cat /srv/stremio-server/detected-ip.txt)
+        fi
+        IP_DOMAIN=$(echo "${RESOLVED_IP}" | sed 's/\./-/g')
+        echo "${RESOLVED_IP} ${IP_DOMAIN}.519b6502d940.stremio.rocks" >> /etc/hosts
+        cp /etc/nginx/https.conf /etc/nginx/http.d/default.conf
+        node certificate.js --action load --pem-path "/srv/stremio-server/certificates.pem" --domain "${IP_DOMAIN}.519b6502d940.stremio.rocks" --json-path "${CONFIG_FOLDER}httpsCert.json"
+    else
+        echo "Failed to setup HTTPS. Falling back to HTTP."
+    fi
+elif [ -n "${CERT_FILE}" ]; then
+    if [ -f "${CONFIG_FOLDER}${CERT_FILE}" ]; then
+        cp "${CONFIG_FOLDER}${CERT_FILE}" /srv/stremio-server/certificates.pem
+        cp /etc/nginx/https.conf /etc/nginx/http.d/default.conf
+        node certificate.js --action load --pem-path "/srv/stremio-server/certificates.pem" --domain "${DOMAIN}" --json-path "${CONFIG_FOLDER}httpsCert.json"
+    fi
+fi
+node --no-deprecation server.js &
+start_http_server
