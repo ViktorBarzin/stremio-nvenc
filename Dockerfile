@@ -94,6 +94,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd --system nginx \
   && useradd --system --no-create-home --shell /usr/sbin/nologin --gid nginx nginx
 
+# infra#80: Debian bullseye's nginx (1.18) predates `application/wasm` in its
+# default mime.types, so the Stremio core WASM (stremio_core_web_bg.wasm) is
+# served as application/octet-stream. WebAssembly.instantiateStreaming() then
+# rejects it and the web client falls back to the slower instantiate() path,
+# which can hard-fail core init on stricter engines / stale caches -> the whole
+# board ("all popular recommendations") fails to load. Register the correct type.
+RUN grep -q 'application/wasm' /etc/nginx/mime.types \
+  || sed -i 's#^}#    application/wasm                  wasm;\n}#' /etc/nginx/mime.types
+
 # jellyfin-ffmpeg NVENC build, pinned to v4.4.1-4 exactly. Installed via apt so
 # its runtime library dependencies resolve from the bullseye repos. Binaries land
 # at /usr/lib/jellyfin-ffmpeg/{ffmpeg,ffprobe} (see FFMPEG_BIN/FFPROBE_BIN below).
