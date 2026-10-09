@@ -7,7 +7,7 @@
 # Derived from tsaridas/stremio-docker (MIT, Copyright (c) 2023 Andreas Tsarida —
 # see LICENSE). Two deliberate departures from upstream, both documented in
 # README.md:
-#   1. The final stage is Debian bullseye (glibc), NOT Alpine (musl). The NVIDIA
+#   1. The final stage is Ubuntu 22.04 jammy (glibc), NOT Alpine (musl). The NVIDIA
 #      encode userspace (libnvidia-encode / libnvcuvid / libcuda, injected at
 #      runtime by the NVIDIA container toolkit) is glibc-only, so a musl base
 #      silently falls back to CPU transcoding (infra#80 spec, workstream A).
@@ -54,11 +54,25 @@ RUN COMMIT_HASH=$COMMIT_HASH pnpm run build
 RUN wget $(wget -O- https://raw.githubusercontent.com/Stremio/stremio-shell/master/server-url.txt) && wget -mkEpnp -nH "https://app.strem.io/" "https://app.strem.io/worker.js" "https://app.strem.io/images/stremio.png" "https://app.strem.io/images/empty.png" -P build/shell/ || true
 
 ############################################################################
-# Stage 2: final — glibc runtime on Debian bullseye. Assembles the server
+# Stage 2: final — glibc runtime on Ubuntu 22.04 jammy. Assembles the server
 # exactly as tsaridas wires it (server.js + web build + nginx + entrypoint),
 # with the NVENC jellyfin-ffmpeg deb in place of the dropped VAAPI ffmpeg stage.
 ############################################################################
-FROM debian:bullseye-slim AS final
+# Ubuntu 22.04 (jammy), moved from Debian 11 bullseye on 2026-10-09 because
+# bullseye's LTS ended 2026-08-31. Not Debian 12: Stremio's server needs ffmpeg
+# 4.x, and jellyfin-ffmpeg 4.4.1-4 (the last 4.x NVENC .deb) ships no bookworm
+# build. Jammy has one, and jammy standard support runs to 2027-04.
+#
+# RENOVATE (ADR-0030, for the agent migrating this repo): this image has no
+# automatic updates yet. Two things to wire up:
+#   1. a renovate.json here so Renovate bumps the pinned bases (alpine, ubuntu)
+#      and the jellyfin-ffmpeg .deb URL below (hold it on 4.x: Stremio's server
+#      does not support ffmpeg 5+);
+#   2. a scheduled rebuild (e.g. a weekly `schedule:` trigger in
+#      .github/workflows/build.yml). The Stremio web client (BRANCH=development)
+#      and server.js are fetched fresh at build time, so a rebuild is the only
+#      thing that updates them; Renovate cannot see those.
+FROM ubuntu:22.04 AS final
 
 ARG VERSION=main
 LABEL org.opencontainers.image.source=https://github.com/tsaridas/stremio-docker
@@ -68,7 +82,7 @@ LABEL version=${VERSION}
 
 # Runtime deps:
 #   nodejs         — runs server.js and certificate.js (installed from NodeSource
-#                    below, NOT the bullseye apt repo: bullseye ships Node 12,
+#                    below, NOT the distro apt repo: jammy ships Node 12,
 #                    which lacks the global `fetch`/`AbortController` certificate.js
 #                    uses and is far older than upstream's Node 22; NodeSource
 #                    Node 22 matches tsaridas's Alpine node and bundles npm).
@@ -76,6 +90,7 @@ LABEL version=${VERSION}
 #   nginx          — single-origin reverse proxy + basic-auth gate (config in nginx/)
 #   apache2-utils  — provides htpasswd, used by the entrypoint to build the auth file
 #   ca-certificates, curl, gnupg — TLS trust + NodeSource setup + egress
+ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
@@ -87,14 +102,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && apt-get install -y --no-install-recommends nodejs \
   && rm -rf /var/lib/apt/lists/*
 
-# tsaridas's nginx.conf declares `user nginx;`. Debian's nginx package runs as
+# tsaridas's nginx.conf declares `user nginx;`. the distro nginx package runs as
 # www-data and creates no `nginx` user, so create it here — this lets nginx.conf
 # stay byte-identical to upstream (the only intentional nginx edit is the
 # torrent-path auth re-enable in nginx/{http.d/default.conf,https.conf}).
 RUN groupadd --system nginx \
   && useradd --system --no-create-home --shell /usr/sbin/nologin --gid nginx nginx
 
-# infra#80: Debian bullseye's nginx (1.18) predates `application/wasm` in its
+# infra#80: the distro nginx (1.18 on both bullseye and jammy) predates `application/wasm` in its
 # default mime.types, so the Stremio core WASM (stremio_core_web_bg.wasm) is
 # served as application/octet-stream. WebAssembly.instantiateStreaming() then
 # rejects it and the web client falls back to the slower instantiate() path,
@@ -104,9 +119,9 @@ RUN grep -q 'application/wasm' /etc/nginx/mime.types \
   || sed -i 's#^}#    application/wasm                  wasm;\n}#' /etc/nginx/mime.types
 
 # jellyfin-ffmpeg NVENC build, pinned to v4.4.1-4 exactly. Installed via apt so
-# its runtime library dependencies resolve from the bullseye repos. Binaries land
+# its runtime library dependencies resolve from the jammy repos. Binaries land
 # at /usr/lib/jellyfin-ffmpeg/{ffmpeg,ffprobe} (see FFMPEG_BIN/FFPROBE_BIN below).
-ADD https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v4.4.1-4/jellyfin-ffmpeg_4.4.1-4-bullseye_amd64.deb /tmp/jellyfin-ffmpeg.deb
+ADD https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v4.4.1-4/jellyfin-ffmpeg_4.4.1-4-jammy_amd64.deb /tmp/jellyfin-ffmpeg.deb
 RUN apt-get update \
   && apt-get install -y --no-install-recommends /tmp/jellyfin-ffmpeg.deb \
   && rm -f /tmp/jellyfin-ffmpeg.deb \

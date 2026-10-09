@@ -5,7 +5,7 @@ unmodified Stremio `server.js` + an nginx single origin + HTTP basic-auth —
 re-based to a **glibc** base with an **NVENC-capable ffmpeg** so it can
 hardware-transcode on an NVIDIA GPU. Validated by a live prototype on the
 cluster's Tesla T4 (driver 570.195.03): `jellyfin-ffmpeg` 4.4.1-4 encodes
-`h264_nvenc` + `hevc_nvenc` on a Debian/glibc base.
+`h264_nvenc` + `hevc_nvenc` on a glibc base.
 
 Derived from [tsaridas/stremio-docker](https://github.com/tsaridas/stremio-docker)
 (MIT — see [`LICENSE`](./LICENSE)). Upstream's layout is carried over as-is: the
@@ -19,7 +19,10 @@ pre-auth torrent path.
 - **glibc, not musl.** Upstream is Alpine (musl). NVIDIA's encode userspace
   (`libnvidia-encode`, `libnvcuvid`, `libcuda`, injected at runtime by the NVIDIA
   container toolkit) is **glibc-only** — on a musl base the encoder probe silently
-  falls back to CPU. The final stage here is `debian:bullseye-slim` (glibc).
+  falls back to CPU. The final stage here is `ubuntu:22.04` (glibc). It was
+  `debian:bullseye-slim` until 2026-10-09; bullseye's LTS ended 2026-08-31, and
+  jellyfin-ffmpeg 4.4.1-4 has no Debian 12 build, so jammy is the newest base
+  the pinned ffmpeg supports.
 - **Prebuilt NVENC ffmpeg.** Upstream builds jellyfin-ffmpeg from source with
   VAAPI. This image drops that stage and installs Jellyfin's prebuilt
   `jellyfin-ffmpeg` **v4.4.1-4** `.deb` (ships `h264_nvenc` / `hevc_nvenc` /
@@ -116,7 +119,7 @@ here — the container serves plain HTTP on 8080 behind Traefik).
 ## Node version
 
 The final stage installs **Node 22 from NodeSource**, not the `nodejs` in the
-bullseye apt repo. Bullseye ships Node 12, which lacks the global `fetch` /
+jammy apt repo. Jammy ships Node 12, which lacks the global `fetch` /
 `AbortController` that `certificate.js` relies on and is far older than upstream's
 Alpine Node 22. NodeSource Node 22 matches upstream and bundles npm.
 
