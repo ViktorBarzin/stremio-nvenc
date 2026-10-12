@@ -90,16 +90,24 @@ LABEL version=${VERSION}
 #   nginx          — single-origin reverse proxy + basic-auth gate (config in nginx/)
 #   apache2-utils  — provides htpasswd, used by the entrypoint to build the auth file
 #   ca-certificates, curl, gnupg — TLS trust + NodeSource setup + egress
+#   libssl3       — already in the base image; listed so the build pulls the
+#                    current jammy security update instead of whatever the
+#                    base image snapshot shipped (Trivy flagged 1.29).
+# npm is removed after the NodeSource install: nothing at runtime calls it (the
+# entrypoint runs `node` directly), and its bundled dependencies carry HIGH
+# CVEs that even the newest npm release has not picked up.
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
       gnupg \
+      libssl3 \
       nginx \
       apache2-utils \
       procps \
   && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
   && apt-get install -y --no-install-recommends nodejs \
+  && rm -rf /usr/lib/node_modules/npm /usr/bin/npm /usr/bin/npx \
   && rm -rf /var/lib/apt/lists/*
 
 # tsaridas's nginx.conf declares `user nginx;`. the distro nginx package runs as
